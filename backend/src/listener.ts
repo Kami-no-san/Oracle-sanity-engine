@@ -36,6 +36,8 @@ import {
 import * as fs from "fs";
 import * as path from "path";
 
+import { broadcastNewEvent } from "./ws-hub";
+
 // ===========================================================================
 // CONFIGURATION
 // ===========================================================================
@@ -87,7 +89,7 @@ export interface CircuitBreakerEvent {
   /** Human-readable reason for the trip (derived from the error code). */
   reason: string;
 
-  /** Numeric `OracleError` code reported by the contract (1-9). */
+  /** Numeric `OracleError` code reported by the contract (1-10). */
   reasonCode: number;
 
   /** Configured deviation threshold in basis points at detection time. */
@@ -216,6 +218,7 @@ const ORACLE_ERROR_REASONS: Record<number, string> = {
   7: "Invalid config",
   8: "Circuit breaker tripped",
   9: "Not initialized",
+  10: "Deviation arithmetic overflow",
 };
 
 // ===========================================================================
@@ -435,7 +438,7 @@ function storeEvent(event: CircuitBreakerEvent): void {
 // ===========================================================================
 
 /** Handles a newly-detected circuit-breaker trip. */
-async function handleTrip(event: CircuitBreakerEvent): Promise<void> {
+export async function handleTrip(event: CircuitBreakerEvent): Promise<void> {
   console.log("\n========================================");
   console.log("🚨 CIRCUIT BREAKER TRIPPED");
   console.log("========================================");
@@ -447,6 +450,7 @@ async function handleTrip(event: CircuitBreakerEvent): Promise<void> {
   console.log("========================================\n");
 
   storeEvent(event);
+  broadcastNewEvent(event);
   await routeAlerts(event);
 }
 

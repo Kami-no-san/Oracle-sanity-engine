@@ -415,8 +415,14 @@ impl OmniCheckContract {
 
     /// Pure validation logic (no storage interaction).
     ///
+    /// Both prices must already be expressed at the same scale/precision; the
+    /// function does not infer feed decimals, so a unit mismatch is reported as
+    /// divergence rather than silently normalized.
+    ///
     /// Returns `Ok(SafePriceResult)` if all checks pass, or an `OracleError`.
-    /// Uses the math module for deviation computation.
+    /// Uses the math module for deviation computation. If the scaled deviation
+    /// cannot be represented in `i128`, `OracleError::ArithmeticOverflow` is
+    /// returned so the trip is not misreported as `OracleError::FeedsDiverged`.
     fn validate_prices(
         primary_price: i128,
         primary_timestamp: u64,
@@ -458,7 +464,7 @@ impl OmniCheckContract {
         // ---------------------------------------------------------------
         // Check 5: Compute deviation using math module
         // ---------------------------------------------------------------
-        let deviation_bps = math::compute_deviation_bps(primary_price, fallback_price);
+        let deviation_bps = math::compute_deviation_bps(primary_price, fallback_price)?;
 
         // ---------------------------------------------------------------
         // Check 6: Deviation threshold
@@ -622,5 +628,35 @@ use soroban_sdk::{Address, Env};
             &1_700_000_000,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deviation_overflow_reports_arithmetic_overflow() {
+        let (_env, _admin, client) = setup_test();
+        let result = client.get_safe_price(
+            &i128::MAX,
+            &1_700_000_000,
+            &1,
+            &1_700_000_000,
+        );
+
+        // The scaled difference cannot fit in i128, so this must surface as
+        // ArithmeticOverflow (code 10) rather than FeedsDiverged (code 1).
+        assert!(result.is_err());
+        assert_eq!(client.get_last_diagnostic(), Some(10));
+        assert!(client.is_locked());
+    }
+
+    #[test]
+    fn test_large_consistent_prices_pass() {
+        let (_env, _admin, client) = setup_test();
+        let primary = 1_000_000_000_000_000_000_000_000_000_000_i128;
+        let fallback = 990_000_000_000_000_000_000_000_000_000_i128;
+
+        let result = client.get_safe_price(&primary, &1_700_000_000, &fallback, &1_700_000_000);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().deviation_bps, 100);
+        assert!(!client.is_locked());
     }
 }

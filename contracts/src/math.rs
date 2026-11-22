@@ -9,6 +9,8 @@
 // consistency across different oracle feeds and prevent precision-related bugs.
 // ---------------------------------------------------------------------------
 
+use crate::error::OracleError;
+
 /// Stellar STROOP precision (10^7).
 /// This matches the native precision of Stellar Classic assets (XLM, custom assets).
 /// Example: $20.00 = 200_000_000 (20 * 10^7)
@@ -66,21 +68,27 @@ pub fn normalize_to_derivative(price: i128, current_precision: i128) -> i128 {
 /// - `price_b` - Second price (typically the fallback oracle price)
 ///
 /// # Returns
-/// Deviation in basis points (1 bp = 0.01%)
-pub fn compute_deviation_bps(price_a: i128, price_b: i128) -> i128 {
-    if price_a <= 0 {
-        return i128::MAX;
+/// Deviation in basis points (1 bp = 0.01%), or an `OracleError` if either
+/// price is non-positive or the intermediate arithmetic overflows `i128`.
+///
+/// # Errors
+/// - `OracleError::InvalidPrice` if either price is zero or negative.
+/// - `OracleError::ArithmeticOverflow` if scaling the difference overflows.
+pub fn compute_deviation_bps(price_a: i128, price_b: i128) -> Result<i128, OracleError> {
+    if price_a <= 0 || price_b <= 0 {
+        return Err(OracleError::InvalidPrice);
     }
 
     let diff = if price_a >= price_b {
-        price_a.saturating_sub(price_b)
+        price_a.checked_sub(price_b)
     } else {
-        price_b.saturating_sub(price_a)
-    };
+        price_b.checked_sub(price_a)
+    }
+    .ok_or(OracleError::ArithmeticOverflow)?;
 
     diff.checked_mul(10_000)
         .and_then(|scaled| scaled.checked_div(price_a))
-        .unwrap_or(i128::MAX)
+        .ok_or(OracleError::ArithmeticOverflow)
 }
 
 #[cfg(test)]
@@ -115,26 +123,58 @@ mod tests {
     #[test]
     fn test_compute_deviation_bps_identical() {
         let deviation = compute_deviation_bps(1_000_000_000, 1_000_000_000);
-        assert_eq!(deviation, 0);
+        assert_eq!(deviation, Ok(0));
     }
 
     #[test]
     fn test_compute_deviation_bps_one_percent() {
         // 1% deviation = 100 bps
         let deviation = compute_deviation_bps(1_000_000_000, 990_000_000);
-        assert_eq!(deviation, 100);
+        assert_eq!(deviation, Ok(100));
     }
 
     #[test]
     fn test_compute_deviation_bps_five_percent() {
         // 5% deviation = 500 bps
         let deviation = compute_deviation_bps(1_000_000_000, 950_000_000);
-        assert_eq!(deviation, 500);
+        assert_eq!(deviation, Ok(500));
     }
 
     #[test]
     fn test_compute_deviation_bps_zero_price() {
-        let deviation = compute_deviation_bps(0, 1_000_000_000);
-        assert_eq!(deviation, i128::MAX);
+        assert_eq!(
+            compute_deviation_bps(0, 1_000_000_000),
+            Err(OracleError::InvalidPrice)
+        );
+        assert_eq!(
+            compute_deviation_bps(1_000_000_000, 0),
+            Err(OracleError::InvalidPrice)
+        );
+    }
+
+    #[test]
+    fn test_compute_deviation_bps_negative_price() {
+        assert_eq!(
+            compute_deviation_bps(-1, 1_000_000_000),
+            Err(OracleError::InvalidPrice)
+        );
+    }
+
+    #[test]
+    fn test_compute_deviation_bps_overflow_is_reported() {
+        // |MAX - 1| * 10_000 cannot be represented in i128.
+        assert_eq!(
+            compute_deviation_bps(i128::MAX, 1),
+            Err(OracleError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_compute_deviation_bps_large_but_consistent_prices() {
+        // 1e30 and 9.9e29 are large yet their scaled difference fits in i128,
+        // so a 1% deviation must still be reported as 100 bps.
+        let primary = 1_000_000_000_000_000_000_000_000_000_000_i128;
+        let fallback = 990_000_000_000_000_000_000_000_000_000_i128;
+        assert_eq!(compute_deviation_bps(primary, fallback), Ok(100));
     }
 }

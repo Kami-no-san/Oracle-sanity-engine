@@ -40,4 +40,7 @@ pub enum OracleError {
 
     /// Contract has not been initialized yet.
     NotInitialized = 9,
+
+    /// Deviation arithmetic overflowed `i128` while scaling the difference.
+    ArithmeticOverflow = 10,
 }

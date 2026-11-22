@@ -41,6 +41,7 @@ import {
   type AlertChannel,
   ALERT_CHANNELS,
 } from "./listener";
+import { registerClient, unregisterClient } from "./ws-hub";
 
 // ===========================================================================
 // CONFIGURATION
@@ -249,6 +250,7 @@ async function buildApp() {
       { websocket: true },
       (socket, _req) => {
         console.log("[WS] Client connected");
+        registerClient(socket);
 
         // Send initial events on connect
         const initialPayload = JSON.stringify({
@@ -268,11 +270,13 @@ async function buildApp() {
         socket.on("close", () => {
           console.log("[WS] Client disconnected");
           clearInterval(heartbeatInterval);
+          unregisterClient(socket);
         });
 
         socket.on("error", (err: Error) => {
           console.error("[WS] Socket error:", err);
           clearInterval(heartbeatInterval);
+          unregisterClient(socket);
         });
       }
     );

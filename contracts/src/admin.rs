@@ -99,7 +99,7 @@ pub fn propose_admin_transfer(env: &Env, new_admin: &Address) -> Result<(), Orac
 /// - `OracleError::Unauthorized` if caller is not the pending admin
 /// - `OracleError::InvalidConfig` if no pending admin is set
 pub fn accept_admin_transfer(env: &Env) -> Result<(), OracleError> {
-    let pending_admin = env.storage()
+    let pending_admin: Address = env.storage()
         .instance()
         .get(&KEY_PENDING_ADMIN)
         .ok_or(OracleError::InvalidConfig)?;
@@ -134,31 +134,43 @@ pub fn is_admin(env: &Env, address: &Address) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Address, Env};
+
+    fn in_contract<F: FnOnce()>(env: &Env, f: F) {
+        let contract_id = env.register(crate::OmniCheckContract, ());
+        env.as_contract(&contract_id, f);
+    }
 
     #[test]
     fn test_set_and_get_admin() {
         let env = Env::default();
-        let admin = Address::generate(&env);
-        
-        set_admin(&env, &admin);
-        assert_eq!(get_admin(&env).unwrap(), admin);
+        in_contract(&env, || {
+            let admin = Address::generate(&env);
+
+            set_admin(&env, &admin);
+            assert_eq!(get_admin(&env).unwrap(), admin);
+        });
     }
 
     #[test]
     fn test_is_admin() {
         let env = Env::default();
-        let admin = Address::generate(&env);
-        let other = Address::generate(&env);
-        
-        set_admin(&env, &admin);
-        assert!(is_admin(&env, &admin));
-        assert!(!is_admin(&env, &other));
+        in_contract(&env, || {
+            let admin = Address::generate(&env);
+            let other = Address::generate(&env);
+
+            set_admin(&env, &admin);
+            assert!(is_admin(&env, &admin));
+            assert!(!is_admin(&env, &other));
+        });
     }
 
     #[test]
     fn test_get_admin_not_initialized() {
         let env = Env::default();
-        assert!(matches!(get_admin(&env), Err(OracleError::NotInitialized)));
+        in_contract(&env, || {
+            assert!(matches!(get_admin(&env), Err(OracleError::NotInitialized)));
+        });
     }
 }

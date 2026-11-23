@@ -236,7 +236,7 @@ pub fn clear_temporary_storage(env: &Env) {
 pub fn bump_instance_ttl(env: &Env) {
     env.storage()
         .instance()
-        .extend_ttl(INSTANCE_TTL_LEDGERS, TTL_EXTENSION_THRESHOLD);
+        .extend_ttl(TTL_EXTENSION_THRESHOLD, INSTANCE_TTL_LEDGERS);
 }
 
 /// Bumps the TTL for a specific temporary storage entry.
@@ -247,7 +247,7 @@ pub fn bump_instance_ttl(env: &Env) {
 pub fn bump_temp_ttl(env: &Env, key: &Symbol) {
     env.storage()
         .temporary()
-        .extend_ttl(key, TEMP_TTL_LEDGERS, TTL_EXTENSION_THRESHOLD);
+        .extend_ttl(key, TTL_EXTENSION_THRESHOLD, TEMP_TTL_LEDGERS);
 }
 
 /// Bumps TTL for all temporary storage entries.
@@ -266,54 +266,64 @@ mod tests {
     use super::*;
     use soroban_sdk::Env;
 
+    fn in_contract<F: FnOnce()>(env: &Env, f: F) {
+        let contract_id = env.register(crate::OmniCheckContract, ());
+        env.as_contract(&contract_id, f);
+    }
+
     #[test]
     fn test_config_storage() {
         let env = Env::default();
-        let config = ValidationConfig {
-            deviation_threshold_bps: 500,
-            max_staleness_secs: 600,
-        };
+        in_contract(&env, || {
+            let config = ValidationConfig {
+                deviation_threshold_bps: 500,
+                max_staleness_secs: 600,
+            };
 
-        set_config(&env, &config);
-        let retrieved = get_config(&env).unwrap();
-        assert_eq!(retrieved.deviation_threshold_bps, 500);
-        assert_eq!(retrieved.max_staleness_secs, 600);
+            set_config(&env, &config);
+            let retrieved = get_config(&env).unwrap();
+            assert_eq!(retrieved.deviation_threshold_bps, 500);
+            assert_eq!(retrieved.max_staleness_secs, 600);
+        });
     }
 
     #[test]
     fn test_locked_storage() {
         let env = Env::default();
+        in_contract(&env, || {
+            set_locked(&env, true);
+            assert!(is_locked(&env));
 
-        set_locked(&env, true);
-        assert!(is_locked(&env));
-
-        set_locked(&env, false);
-        assert!(!is_locked(&env));
+            set_locked(&env, false);
+            assert!(!is_locked(&env));
+        });
     }
 
     #[test]
     fn test_diagnostic_storage() {
         let env = Env::default();
+        in_contract(&env, || {
+            set_last_diagnostic(&env, 100);
+            assert_eq!(get_last_diagnostic(&env), Some(100));
 
-        set_last_diagnostic(&env, 100);
-        assert_eq!(get_last_diagnostic(&env), Some(100));
-
-        set_last_diagnostic(&env, 200);
-        assert_eq!(get_last_diagnostic(&env), Some(200));
+            set_last_diagnostic(&env, 200);
+            assert_eq!(get_last_diagnostic(&env), Some(200));
+        });
     }
 
     #[test]
     fn test_clear_temporary_storage() {
         let env = Env::default();
+        in_contract(&env, || {
+            set_last_diagnostic(&env, 100);
+            set_last_primary_price(&env, 1_000_000);
+            set_last_fallback_price(&env, 1_000_000);
 
-        set_last_diagnostic(&env, 100);
-        set_last_primary_price(&env, 1_000_000);
-        set_last_fallback_price(&env, 1_000_000);
+            clear_temporary_storage(&env);
 
-        clear_temporary_storage(&env);
-
-        assert_eq!(get_last_diagnostic(&env), None);
-        assert_eq!(get_last_primary_price(&env), None);
-        assert_eq!(get_last_fallback_price(&env), None);
+            assert_eq!(get_last_diagnostic(&env), None);
+            assert_eq!(get_last_primary_price(&env), None);
+            assert_eq!(get_last_fallback_price(&env), None);
+        });
     }
 }

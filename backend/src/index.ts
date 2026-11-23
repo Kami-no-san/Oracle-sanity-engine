@@ -36,6 +36,7 @@ dotenvConfig();
 import {
   startEventListener,
   recentEvents,
+  subscribeToEvents,
   DEFAULT_LISTENER_CONFIG,
   type CircuitBreakerEvent,
   type AlertChannel,
@@ -49,6 +50,13 @@ import {
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
 const ENABLE_LISTENER = process.env.ENABLE_LISTENER !== "false"; // default: true
+
+/**
+ * Per-client send buffer ceiling (bytes). Clients whose buffer exceeds this are
+ * treated as slow consumers and their new-event frames are dropped rather than
+ * queued, preventing unbounded memory growth.
+ */
+const MAX_WS_BUFFERED_BYTES = 1_000_000;
 
 // ===========================================================================
 // APPLICATION SETUP
@@ -257,6 +265,21 @@ async function buildApp() {
         });
         socket.send(initialPayload);
 
+        // Broadcast every new event to this client as it is detected.
+        // Drop the message for slow clients instead of buffering unbounded.
+        const unsubscribe = subscribeToEvents((event: CircuitBreakerEvent) => {
+          if (socket.readyState !== 1) {
+            return; // Socket no longer OPEN
+          }
+          if (socket.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+            console.warn(
+              "[WS] Dropping new_event for slow client (backpressure)"
+            );
+            return;
+          }
+          socket.send(JSON.stringify({ type: "new_event", event }));
+        });
+
         // Heartbeat every 30 seconds
         const heartbeatInterval = setInterval(() => {
           if (socket.readyState === 1) {
@@ -267,11 +290,13 @@ async function buildApp() {
 
         socket.on("close", () => {
           console.log("[WS] Client disconnected");
+          unsubscribe();
           clearInterval(heartbeatInterval);
         });
 
         socket.on("error", (err: Error) => {
           console.error("[WS] Socket error:", err);
+          unsubscribe();
           clearInterval(heartbeatInterval);
         });
       }

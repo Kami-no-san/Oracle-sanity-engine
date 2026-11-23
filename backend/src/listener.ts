@@ -431,6 +431,40 @@ function storeEvent(event: CircuitBreakerEvent): void {
 }
 
 // ===========================================================================
+// EVENT SUBSCRIPTIONS (REAL-TIME BROADCAST)
+// ===========================================================================
+
+/** Callback invoked for every newly stored circuit-breaker event. */
+export type EventSubscriber = (event: CircuitBreakerEvent) => void;
+
+/** Active subscribers (e.g. WebSocket clients) awaiting new events. */
+const subscribers = new Set<EventSubscriber>();
+
+/**
+ * Registers a subscriber that is notified of each new circuit-breaker event.
+ *
+ * @param subscriber — Callback invoked synchronously for every new event.
+ * @returns An unsubscribe function to call when the consumer disconnects.
+ */
+export function subscribeToEvents(subscriber: EventSubscriber): () => void {
+  subscribers.add(subscriber);
+  return () => {
+    subscribers.delete(subscriber);
+  };
+}
+
+/** Notifies all subscribers of a new event, isolating individual failures. */
+function broadcastEvent(event: CircuitBreakerEvent): void {
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(event);
+    } catch (err) {
+      console.error("[Listener] Event subscriber failed:", err);
+    }
+  }
+}
+
+// ===========================================================================
 // EVENT HANDLER
 // ===========================================================================
 
@@ -447,6 +481,7 @@ async function handleTrip(event: CircuitBreakerEvent): Promise<void> {
   console.log("========================================\n");
 
   storeEvent(event);
+  broadcastEvent(event);
   await routeAlerts(event);
 }
 

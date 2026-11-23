@@ -61,26 +61,32 @@ pub fn normalize_to_derivative(price: i128, current_precision: i128) -> i128 {
 ///
 /// deviation_bps = (|price_a - price_b| * 10_000) / price_a
 ///
+/// Both prices are assumed to share the same scale/decimals. Callers that
+/// source prices from feeds with differing precision must normalize them
+/// (see [`normalize_to_stroop`] / [`normalize_to_derivative`]) first.
+///
 /// # Arguments
 /// - `price_a` - First price (typically the primary oracle price)
 /// - `price_b` - Second price (typically the fallback oracle price)
 ///
 /// # Returns
-/// Deviation in basis points (1 bp = 0.01%)
-pub fn compute_deviation_bps(price_a: i128, price_b: i128) -> i128 {
+/// - `Some(deviation)` in basis points (1 bp = 0.01%) when the computation
+///   fits in an `i128`.
+/// - `None` when `price_a` is non-positive or the intermediate arithmetic
+///   overflows. Overflow is surfaced explicitly so callers can distinguish it
+///   from genuine feed divergence instead of coercing to `i128::MAX`.
+pub fn compute_deviation_bps(price_a: i128, price_b: i128) -> Option<i128> {
     if price_a <= 0 {
-        return i128::MAX;
+        return None;
     }
 
     let diff = if price_a >= price_b {
-        price_a.saturating_sub(price_b)
+        price_a.checked_sub(price_b)?
     } else {
-        price_b.saturating_sub(price_a)
+        price_b.checked_sub(price_a)?
     };
 
-    diff.checked_mul(10_000)
-        .and_then(|scaled| scaled.checked_div(price_a))
-        .unwrap_or(i128::MAX)
+    diff.checked_mul(10_000)?.checked_div(price_a)
 }
 
 #[cfg(test)]
@@ -115,26 +121,33 @@ mod tests {
     #[test]
     fn test_compute_deviation_bps_identical() {
         let deviation = compute_deviation_bps(1_000_000_000, 1_000_000_000);
-        assert_eq!(deviation, 0);
+        assert_eq!(deviation, Some(0));
     }
 
     #[test]
     fn test_compute_deviation_bps_one_percent() {
         // 1% deviation = 100 bps
         let deviation = compute_deviation_bps(1_000_000_000, 990_000_000);
-        assert_eq!(deviation, 100);
+        assert_eq!(deviation, Some(100));
     }
 
     #[test]
     fn test_compute_deviation_bps_five_percent() {
         // 5% deviation = 500 bps
         let deviation = compute_deviation_bps(1_000_000_000, 950_000_000);
-        assert_eq!(deviation, 500);
+        assert_eq!(deviation, Some(500));
     }
 
     #[test]
     fn test_compute_deviation_bps_zero_price() {
         let deviation = compute_deviation_bps(0, 1_000_000_000);
-        assert_eq!(deviation, i128::MAX);
+        assert_eq!(deviation, None);
+    }
+
+    #[test]
+    fn test_compute_deviation_bps_overflow_returns_none() {
+        // |MAX - 1| * 10_000 overflows i128; must be surfaced, not coerced.
+        let deviation = compute_deviation_bps(i128::MAX, 1);
+        assert_eq!(deviation, None);
     }
 }
